@@ -49,22 +49,27 @@ int init(const std::vector<uint8_t> &root_unique_id_val, int rank, int num_ranks
     nvshmemx_init_attr(NVSHMEMX_INIT_WITH_UNIQUEID, &attr);
 
     // Create sub-RDMA teams
-    // NOTES: if `num_ranks <= NUM_MAX_NVL_PEERS` then only low-latency kernels are used
     if (low_latency_mode and num_ranks > NUM_MAX_NVL_PEERS) {
         EP_HOST_ASSERT(cpu_rdma_team == NVSHMEM_TEAM_INVALID);
         EP_HOST_ASSERT(num_ranks % NUM_MAX_NVL_PEERS == 0);
         EP_HOST_ASSERT(nvshmem_team_split_strided(NVSHMEM_TEAM_WORLD, rank % NUM_MAX_NVL_PEERS, NUM_MAX_NVL_PEERS,
                                                   num_ranks / NUM_MAX_NVL_PEERS, &cpu_rdma_team_config, 0, &cpu_rdma_team) == 0);
         EP_HOST_ASSERT(cpu_rdma_team != NVSHMEM_TEAM_INVALID);
+        
+        // 确保 RDMA 团队初始化完成
+        nvshmem_barrier_all();
     }
 
-    // TODO: we still use `nvshmem_barrier` under IBRC mode, which should be switch to IBGDA mode later
     nvshmemi_device_host_state_t* dev_state_ptr = nullptr;
     CUDA_CHECK(cudaGetSymbolAddress(reinterpret_cast<void**>(&dev_state_ptr), nvshmemi_device_state_d));
 
     bool ibgda_is_initialized = false;
     CUDA_CHECK(cudaMemcpy(&dev_state_ptr->ibgda_is_initialized, &ibgda_is_initialized, sizeof(bool), cudaMemcpyHostToDevice));
+    
+    // 确保所有设备都完成初始化
     nvshmem_barrier_all();
+    CUDA_CHECK(cudaDeviceSynchronize());
+    
     return nvshmem_my_pe();
 }
 
@@ -78,6 +83,7 @@ void free(void* ptr) {
 
 void barrier() {
     nvshmem_barrier_all();
+    CUDA_CHECK(cudaDeviceSynchronize());
 }
 
 void finalize() {

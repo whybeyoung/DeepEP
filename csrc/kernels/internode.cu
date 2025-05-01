@@ -754,23 +754,35 @@ dispatch(int4* recv_x, float* recv_x_scales, int64_t* recv_topk_idx, float* recv
         auto start_time = clock64();
         if (lane_id < kNumRDMARanks) {
             while (true) {
+                __threadfence_system();
                 auto meta_0 = ld_volatile_global(rdma_channel_meta.recv_buffer(lane_id) + dst_nvl_rank);
+                __threadfence_system();
                 auto meta_1 = ld_volatile_global(rdma_channel_meta.recv_buffer(lane_id) + NUM_MAX_NVL_PEERS + dst_nvl_rank);
+                __threadfence_system();
                 auto meta_2 = ld_volatile_global(rdma_channel_meta.recv_buffer(lane_id) + NUM_MAX_NVL_PEERS * 2);
+                __threadfence_system();
                 auto meta_3 = ld_volatile_global(rdma_channel_meta.recv_buffer(lane_id) + NUM_MAX_NVL_PEERS * 2 + 1);
+                __threadfence_system();
+
                 if (meta_0 < 0 and meta_1 < 0 and meta_2 < 0 and meta_3 < 0) {
                     // Notify NVL ranks
                     int start_sum = -meta_0 - 1, end_sum = -meta_1 - 1;
                     EP_DEVICE_ASSERT(start_sum >= 0 and end_sum >= 0 and end_sum >= start_sum);
-                    st_relaxed_sys_global(nvl_channel_prefix_start.buffer() + lane_id, -start_sum - 1);
-                    st_relaxed_sys_global(nvl_channel_prefix_end.buffer() + lane_id, -end_sum - 1);
+                    __threadfence_system();
+                    st_release_sys_global(nvl_channel_prefix_start.buffer() + lane_id, -start_sum - 1);
+                    __threadfence_system();
+                    st_release_sys_global(nvl_channel_prefix_end.buffer() + lane_id, -end_sum - 1);
+                    __threadfence_system();
 
                     // Save RDMA channel received token count
                     src_rdma_channel_prefix = -meta_2 - 1;
                     auto src_rdma_channel_prefix_1 = -meta_3 - 1;
                     num_tokens_to_recv_from_rdma = src_rdma_channel_prefix_1 - src_rdma_channel_prefix;
-                    if (not kCachedMode)
+                    if (not kCachedMode) {
+                        __threadfence_system();
                         recv_rdma_channel_prefix_matrix[lane_id * num_channels + channel_id] = src_rdma_channel_prefix_1;
+                        __threadfence_system();
+                    }
                     src_rdma_channel_prefix += lane_id == 0 ? 0 : recv_rdma_rank_prefix_sum[lane_id - 1];
                     EP_DEVICE_ASSERT(num_tokens_to_recv_from_rdma >= 0);
                     break;

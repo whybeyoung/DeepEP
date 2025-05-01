@@ -82,27 +82,25 @@ nvshmemi_ibgda_device_qp_t* ibgda_get_rc(int pe, int id) {
 
 __device__ static __forceinline__
 void ibgda_lock_acquire(int *lock) {
-    while (atomicCAS(lock, 0, 1) == 1);
-
-    // Prevent reordering before the lock is acquired
+    while (atomicCAS(lock, 0, 1) == 1) {
+        __threadfence_system();
+    }
+    __threadfence_system();
     memory_fence_cta();
 }
 
 __device__ static __forceinline__
 void ibgda_lock_release(int *lock) {
+    __threadfence_system();
     memory_fence_cta();
-
-    // Prevent reordering before lock is released
-    st_na_relaxed(lock, 0);
+    st_na_release(lock, 0);
 }
 
 __device__ static __forceinline__
 void ibgda_update_dbr(nvshmemi_ibgda_device_qp_t *qp, uint32_t dbrec_head) {
-    // `DBREC` contains the index of the next empty `WQEBB`
     __be32 dbrec_val;
     __be32 *dbrec_ptr = qp->tx_wq.dbrec;
 
-    // This is equivalent to `WRITE_ONCE(dbrec_ptr, HtoBE32(dbrec_head & 0xffff))`
     asm("{\n\t"
         ".reg .b32 dbrec_head_16b;\n\t"
         ".reg .b32 ign;\n\t"
@@ -111,7 +109,9 @@ void ibgda_update_dbr(nvshmemi_ibgda_device_qp_t *qp, uint32_t dbrec_head) {
         "}"
         : "=r"(dbrec_val)
         : "r"(dbrec_head));
+    __threadfence_system();
     st_na_release(dbrec_ptr, dbrec_val);
+    __threadfence_system();
 }
 
 __device__ static __forceinline__
@@ -123,7 +123,9 @@ void ibgda_ring_db(nvshmemi_ibgda_device_qp_t *qp, uint16_t prod_idx) {
     };
 
     EP_STATIC_ASSERT(sizeof(decltype(&ctrl_seg)) == sizeof(uint64_t), "");
+    __threadfence_system();
     st_na_release(bf_ptr, *(reinterpret_cast<uint64_t*>(&ctrl_seg)));
+    __threadfence_system();
 }
 
 __device__ static __forceinline__
@@ -131,14 +133,15 @@ void ibgda_post_send(nvshmemi_ibgda_device_qp_t *qp, uint64_t new_prod_idx) {
     nvshmemi_ibgda_device_qp_management_t *mvars = &qp->mvars;
     uint64_t old_prod_idx;
 
-    // Update `prod_idx` before ringing the doorbell, so that we know which index is needed in quiet/fence
     ibgda_lock_acquire(&mvars->post_send_lock);
+    __threadfence_system();
 
     old_prod_idx = atomicMax(reinterpret_cast<unsigned long long int*>(&mvars->tx_wq.prod_idx), new_prod_idx);
     if (new_prod_idx > old_prod_idx) {
         ibgda_update_dbr(qp, new_prod_idx);
         ibgda_ring_db(qp, new_prod_idx);
     }
+    __threadfence_system();
     ibgda_lock_release(&mvars->post_send_lock);
 }
 
