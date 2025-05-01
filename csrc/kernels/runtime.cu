@@ -18,10 +18,10 @@ __global__ void barrier(int** task_fifo_ptrs, int head, int rank) {
 
 void barrier(int** task_fifo_ptrs, int head, int rank, int num_ranks, cudaStream_t stream) {
 #define BARRIER_LAUNCH_CASE(ranks) \
+    SETUP_LAUNCH_CONFIG(1, 32, stream); \
     LAUNCH_KERNEL(&cfg, barrier<ranks>, task_fifo_ptrs, head, rank); \
     break
 
-    SETUP_LAUNCH_CONFIG(1, 32, stream);
     SWITCH_RANKS(BARRIER_LAUNCH_CASE);
 #undef BARRIER_LAUNCH_CASE
 }
@@ -82,6 +82,7 @@ void free(void* ptr) {
 }
 
 void barrier() {
+    // 使用非 cooperative 的 barrier
     nvshmem_barrier_all();
     CUDA_CHECK(cudaDeviceSynchronize());
 }
